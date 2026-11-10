@@ -4,8 +4,6 @@
 
 A small moderation bot for Matrix (Synapse): deletes messages in a room on command. Python, [matrix-nio](https://github.com/matrix-nio/matrix-nio), runs in Docker.
 
-> Note: the bot's replies in chat are currently in Russian.
-
 ## Commands
 
 The prefix is configurable (`BOT_CMD`, default `!genabot`). Commands are executed only for users listed in `ALLOWED_INVITERS` (if set) who also have at least `MIN_LEVEL` power level in the room (default 50).
@@ -32,6 +30,8 @@ The prefix is configurable (`BOT_CMD`, default `!genabot`). Commands are execute
 Examples: `!genabot keep 100 dry`, `!genabot purge from:webhooks older:7d yes`, `!genabot purge 10`.
 
 Deletion uses the normal Matrix mechanism (redaction): a message becomes an empty shell that stays in the room history. Clients have to page through such stretches for nothing, so after large cleanups the physical purge (see below) is preferable.
+
+The bot replies in English by default; set `BOT_LANG=ru` in `.env` for Russian replies.
 
 ## Installation
 
