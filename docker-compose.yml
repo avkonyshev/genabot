@@ -1,0 +1,14 @@
+services:
+  genabot:
+    build: .
+    container_name: genabot
+    restart: unless-stopped
+    # The bot connects to Synapse itself and opens no inbound ports.
+    # network_mode: host is convenient when Synapse listens on the host's localhost; otherwise remove it
+    # and set MATRIX_HOMESERVER to an address reachable from the container.
+    network_mode: host
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
