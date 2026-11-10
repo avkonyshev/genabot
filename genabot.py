@@ -112,12 +112,37 @@ async def redact(room_id, event_id):
     return False
 
 
-def can_command(room: MatrixRoom, uid: str) -> bool:
-    return room.power_levels.get_user_level(uid) >= MIN_LEVEL
+CREATORS: dict[str, set] = {}
 
 
-def bot_can_redact(room: MatrixRoom) -> bool:
-    return room.power_levels.get_user_level(mx.user_id) >= room.power_levels.defaults.redact
+async def creators(room: MatrixRoom) -> set:
+    """Room creators. In room version 12+ they have unlimited power and are NOT listed in the power levels,
+    so the power level table alone would show them as level 0. The create event ID is the room ID without "!"."""
+    v = room.room_version
+    if not (v.isdigit() and int(v) >= 12):
+        return set()
+    if room.room_id not in CREATORS:
+        r = await mx.room_get_event(room.room_id, "$" + room.room_id[1:])
+        found = set()
+        if isinstance(r, RoomGetEventResponse):
+            found.add(r.event.sender)
+            found |= {u for u in r.event.source.get("content", {}).get("additional_creators", []) if isinstance(u, str)}
+        if not found:
+            return set()  # could not find out now: do not cache, try again next time
+        CREATORS[room.room_id] = found
+    return CREATORS[room.room_id]
+
+
+async def has_level(room: MatrixRoom, uid: str, need: int) -> bool:
+    return uid in await creators(room) or room.power_levels.get_user_level(uid) >= need
+
+
+async def can_command(room: MatrixRoom, uid: str) -> bool:
+    return await has_level(room, uid, MIN_LEVEL)
+
+
+async def bot_can_redact(room: MatrixRoom) -> bool:
+    return await has_level(room, mx.user_id, room.power_levels.defaults.redact)
 
 
 def clip(t, n=20):
@@ -352,7 +377,7 @@ async def physical(room: MatrixRoom, ev, kept, victims, edge, dry, yes, need_yes
         log.info("%s: physical purge in %s, boundary %s, ok=%s", ev.sender, tid, edge.event_id, ok)
 
 
-def remote_target(room: MatrixRoom, ev, flt):
+async def remote_target(room: MatrixRoom, ev, flt):
     """The room to clean: the same one or the one given via room:. -> (room, error)."""
     if not flt.room or flt.room == room.room_id:
         return room, None
@@ -365,10 +390,10 @@ def remote_target(room: MatrixRoom, ev, flt):
     tgt = mx.rooms.get(flt.room)
     if tgt is None:
         return None, T("Бот не состоит в этой комнате.", "The bot is not in that room.")
-    if ev.sender not in tgt.users or tgt.power_levels.get_user_level(ev.sender) < MIN_LEVEL:
+    if ev.sender not in tgt.users or not await has_level(tgt, ev.sender, MIN_LEVEL):
         return None, T(f"В той комнате у вас нет прав модератора (уровень {MIN_LEVEL}+).",
                        f"You are not a moderator in that room (power level {MIN_LEVEL}+ required).")
-    if not bot_can_redact(tgt):
+    if not await bot_can_redact(tgt):
         return None, T(f"У бота мало прав в той комнате: нужен уровень {tgt.power_levels.defaults.redact}+.",
                        f"The bot has too few rights in that room: power level {tgt.power_levels.defaults.redact}+ required.")
     if tgt.encrypted and flt.text:
@@ -382,7 +407,7 @@ async def bulk(room: MatrixRoom, ev, cmd, arg):
     if err:
         await say(room.room_id, err + T(f" Справка: {PREFIX}help", f" Help: {PREFIX}help"))
         return
-    tgt, err = remote_target(room, ev, flt)
+    tgt, err = await remote_target(room, ev, flt)
     if err:
         await say(room.room_id, err)
         return
@@ -489,7 +514,7 @@ async def on_message(room: MatrixRoom, ev: RoomMessageText):
         await say(room.room_id, T(f"Команда {cmd} не принимает параметров. Справка: {PREFIX}help",
                                   f"The {cmd} command takes no parameters. Help: {PREFIX}help"))
         return
-    if not can_command(room, ev.sender):
+    if not await can_command(room, ev.sender):
         await say(room.room_id, T(f"{ev.sender}: команда доступна модераторам комнаты (уровень {MIN_LEVEL}+).",
                                   f"{ev.sender}: this command is for room moderators (power level {MIN_LEVEL}+)."))
         return
@@ -498,7 +523,7 @@ async def on_message(room: MatrixRoom, ev: RoomMessageText):
     elif cmd == "help":
         await say(room.room_id, HELP)
     elif cmd in ("del", "purge", "keep"):
-        if " room:" not in " " + arg.lower() and not bot_can_redact(room):
+        if " room:" not in " " + arg.lower() and not await bot_can_redact(room):
             await say(room.room_id, T(f"У бота мало прав в комнате: нужен уровень {room.power_levels.defaults.redact}+ (модератор).",
                                       f"The bot has too few rights in this room: power level {room.power_levels.defaults.redact}+ (moderator) required."))
             return
